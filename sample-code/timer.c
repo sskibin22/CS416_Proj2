@@ -32,10 +32,10 @@ int main(){
 
 	// Set the timer up (start the timer)
 	setitimer(ITIMER_PROF, &timer, NULL);
-	
+
 	// Kill some time
 	while(1);
-
+	
 	return 0;
 
 }
