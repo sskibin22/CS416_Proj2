@@ -90,11 +90,6 @@ int worker_create(worker_t * thread, pthread_attr_t * attr,
     /*enqueue tcb to ready queue*/
 	enqueue(_tcb, psjf->p_queue);
 
-    if(first_ctx == 0){
-        swapcontext(&main_tcb->t_ctx, &psjf->sched_ctx);
-        first_ctx = 1;
-    }
-
 	return 0;
 };
 
@@ -259,7 +254,6 @@ static void sched_psjf() {
 
 	// YOUR CODE HERE
 
-    // block_signal();
     /*No thread is currently scheduled (either because no thread has been scheduled yet or a worker thread has exited)*/
     queue_display(psjf->p_queue);
     if(scheduled == NULL){
@@ -283,12 +277,6 @@ static void sched_psjf() {
             scheduled = remove_at(min_elapsed, psjf->p_queue);
             scheduled->t_state = SCHEDULED;
             setcontext(&scheduled->t_ctx);
-        }
-        /*No thread scheduled and queue is empty*/
-        else{
-            /*TODO: no thread scheduled and queue is empty*/
-            // setcontext(&main_ctx);
-            setcontext(&main_tcb->t_ctx);
         }
     }
     /*One quantum has elapsed prior to the currently scheduled thread exiting*/
@@ -323,7 +311,6 @@ static void sched_psjf() {
         }
         
     }
-    // unblock_signal();
     
 }
 
