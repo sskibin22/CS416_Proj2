@@ -50,6 +50,11 @@ typedef struct TCB {
     ucontext_t t_ctx;
     void *return_value;
     int elapsed;
+	struct timespec arrival;
+	struct timespec start;
+	struct timespec completion;
+	int t_scheduled;
+
 } tcb; 
 
 /* mutex struct definition */
@@ -109,27 +114,6 @@ int worker_mutex_unlock(worker_mutex_t *mutex);
 
 /* destroy the mutex */
 int worker_mutex_destroy(worker_mutex_t *mutex);
-
-
-int init_main_thread(void);
-void main_thread_func();
-queue_t* queue_init();
-int is_empty(queue_t* q);
-node_t* node_init();
-void enqueue(tcb* t, queue_t* q);
-tcb* dequeue(queue_t* q);
-tcb* remove_at(worker_t id, queue_t* q);
-tcb *find_tcb(worker_t id, queue_t* q);
-worker_t get_min_elapsed(queue_t* q);
-int length(queue_t* q);
-void queue_destroy(queue_t* q);
-void queue_display(queue_t* q);
-psjf_t* psjf_init();
-void psjf_destroy(psjf_t* s);
-void block_signal();
-void unblock_signal();
-void timer_handler(int signum, siginfo_t* siginfo, void* sig);
-int init_sig_timer();
 
 
 /* Function to print global statistics. Do not modify this function.*/

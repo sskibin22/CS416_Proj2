@@ -14,9 +14,29 @@ double avg_resp_time=0;
 
 // INITAILIZE ALL YOUR OTHER VARIABLES HERE
 // YOUR CODE HERE
+/*Static Function Declarations*/
 static void schedule();
 static void sched_psjf();
 static void sched_mlfq();
+static int init_main_thread(void);
+static void main_thread_func();
+static queue_t* queue_init();
+static int is_empty(queue_t* q);
+static node_t* node_init();
+static void enqueue(tcb* t, queue_t* q);
+static tcb* dequeue(queue_t* q);
+static tcb* remove_at(worker_t id, queue_t* q);
+static tcb *find_tcb(worker_t id, queue_t* q);
+static worker_t get_min_elapsed(queue_t* q);
+static int length(queue_t* q);
+static void queue_destroy(queue_t* q);
+static void queue_display(queue_t* q);
+static psjf_t* psjf_init();
+static void psjf_destroy(psjf_t* s);
+static void block_signal();
+static void unblock_signal();
+static void timer_handler(int signum, siginfo_t* siginfo, void* sig);
+static int init_sig_timer();
 
 /*Global Variables*/
 int lib_active = 0;
@@ -26,6 +46,10 @@ psjf_t* psjf = NULL;
 queue_t* exit_q;
 tcb* scheduled = NULL;
 tcb* main_tcb = NULL;
+double total_turn_time = 0;
+double total_resp_time = 0;
+int total_exited = 0;
+
 
 
 /* create a new thread */
@@ -64,6 +88,7 @@ int worker_create(worker_t * thread, pthread_attr_t * attr,
 	_tcb->t_state = READY;
 	_tcb->t_prio = 0;
 	_tcb->elapsed = 0;
+    _tcb->t_scheduled = 0;
     /*initialize tcb context*/
 	if(getcontext(&_tcb->t_ctx) < 0){
 		perror("getcontext");
@@ -89,6 +114,7 @@ int worker_create(worker_t * thread, pthread_attr_t * attr,
 	
     /*enqueue tcb to ready queue*/
 	enqueue(_tcb, psjf->p_queue);
+    clock_gettime(CLOCK_REALTIME, &_tcb->arrival);
 
 	return 0;
 };
@@ -101,6 +127,7 @@ int worker_yield() {
 	// - switch from thread context to scheduler context
 
 	// YOUR CODE HERE
+    tot_cntx_switches++;
     if(scheduled == NULL){
         if(setcontext(&psjf->sched_ctx) < 0){
             return -1;
@@ -120,10 +147,17 @@ void worker_exit(void *value_ptr) {
     
 	// YOUR CODE HERE
     block_signal();
+    total_exited++;
     scheduled->return_value = value_ptr;
     scheduled->t_state = EXITED;
-
+    clock_gettime(CLOCK_REALTIME, &scheduled->completion);
     enqueue(scheduled, exit_q);
+    if(scheduled->t_id != 0){
+        total_resp_time += (scheduled->start.tv_sec - scheduled->arrival.tv_sec) * 1000 + (scheduled->start.tv_nsec - scheduled->arrival.tv_nsec) / 1000000;
+        total_turn_time += (scheduled->completion.tv_sec - scheduled->arrival.tv_sec) * 1000 + (scheduled->completion.tv_nsec - scheduled->arrival.tv_nsec) / 1000000;
+        avg_resp_time = total_resp_time / (double)total_exited;
+        avg_turn_time = total_turn_time / (double)total_exited;
+    }
     scheduled = NULL;
     unblock_signal();
 
@@ -267,6 +301,11 @@ static void sched_psjf() {
         if(length(psjf->p_queue) == 1){
             scheduled = dequeue(psjf->p_queue);
             scheduled->t_state = SCHEDULED;
+            if(scheduled->t_scheduled == 0){
+                scheduled->t_scheduled = 1;
+                clock_gettime(CLOCK_REALTIME, &scheduled->start);
+            }
+            tot_cntx_switches++;
             setcontext(&scheduled->t_ctx);
         }
         /*More than one thread in queue*/
@@ -276,6 +315,11 @@ static void sched_psjf() {
             //dequeue thread found in min search from queue
             scheduled = remove_at(min_elapsed, psjf->p_queue);
             scheduled->t_state = SCHEDULED;
+            if(scheduled->t_scheduled == 0){
+                scheduled->t_scheduled = 1;
+                clock_gettime(CLOCK_REALTIME, &scheduled->start);
+            }
+            tot_cntx_switches++;
             setcontext(&scheduled->t_ctx);
         }
     }
@@ -285,6 +329,7 @@ static void sched_psjf() {
         /*If queue is empty, continue to run currently scheduled thread*/
         if(is_empty(psjf->p_queue)){
             // printf("id: %i, elapsed: %d quantums\n", scheduled->t_id, scheduled->elapsed);
+            tot_cntx_switches++;
             setcontext(&scheduled->t_ctx);
         }
         /*If there is only one other thread in the queue simply enqueue() currently scheduled and dequeue() next thread to be scheduled*/
@@ -294,6 +339,11 @@ static void sched_psjf() {
             enqueue(scheduled, psjf->p_queue);
             scheduled = dequeue(psjf->p_queue);
             scheduled->t_state = SCHEDULED;
+            if(scheduled->t_scheduled == 0){
+                scheduled->t_scheduled = 1;
+                clock_gettime(CLOCK_REALTIME, &scheduled->start);
+            }
+            tot_cntx_switches++;
             setcontext(&scheduled->t_ctx);
         }
         /*If length of queue > 1:
@@ -307,6 +357,11 @@ static void sched_psjf() {
             worker_t min_elapsed = get_min_elapsed(psjf->p_queue);
             scheduled = remove_at(min_elapsed, psjf->p_queue);
             scheduled->t_state = SCHEDULED;
+            if(scheduled->t_scheduled == 0){
+                scheduled->t_scheduled = 1;
+                clock_gettime(CLOCK_REALTIME, &scheduled->start);
+            }
+            tot_cntx_switches++;
             setcontext(&scheduled->t_ctx);
         }
         
@@ -337,7 +392,7 @@ void print_app_stats(void) {
 
 // YOUR CODE HERE
 /*Main Benchmark Thread initialize function*/
-int init_main_thread()
+static int init_main_thread()
 {
     tcb* m_tcb = (tcb*)calloc(1, sizeof(tcb));
     if (m_tcb == NULL){
@@ -349,6 +404,7 @@ int init_main_thread()
     m_tcb->t_state = MAIN;
     m_tcb->t_prio = 0;
     m_tcb->elapsed = 0;
+    m_tcb->t_scheduled = 1;
     /*initialize tcb context*/
     if(getcontext(&m_tcb->t_ctx) < 0){
         perror("getcontext");
@@ -370,7 +426,7 @@ int init_main_thread()
     return 0;
 }
 
-void main_thread_func(){
+static void main_thread_func(){
     worker_exit(NULL);
     return;
 }
@@ -384,7 +440,7 @@ queue_t* queue_init(){
     return q;
 }
 
-int is_empty(queue_t* q) {
+static int is_empty(queue_t* q) {
     return q->head == NULL;
 }
 
@@ -395,7 +451,7 @@ node_t* node_init(tcb* t){
     return n;
 }
 
-void enqueue(tcb* t, queue_t* q){
+static void enqueue(tcb* t, queue_t* q){
     node_t* n = node_init(t);
     if(is_empty(q)){
         q->head = q->tail = n;
@@ -407,7 +463,7 @@ void enqueue(tcb* t, queue_t* q){
     q->length++;
 }
 
-tcb* dequeue(queue_t* q){
+static tcb* dequeue(queue_t* q){
     if(!is_empty(q)){
         node_t* temp = q->head;
         if(q->head == q->tail){
@@ -424,7 +480,7 @@ tcb* dequeue(queue_t* q){
     return NULL;
 }
 
-tcb* remove_at(worker_t id, queue_t* q){
+static tcb* remove_at(worker_t id, queue_t* q){
     tcb* r = NULL;
     node_t* prev = NULL;
     node_t* curr = q->head;
@@ -457,7 +513,7 @@ tcb* remove_at(worker_t id, queue_t* q){
     return r;
 }
 
-tcb *find_tcb(worker_t id, queue_t* q){
+static tcb *find_tcb(worker_t id, queue_t* q){
     node_t *temp = q->head;
     while (temp != NULL) {
         if (temp->data->t_id == id) {
@@ -468,7 +524,7 @@ tcb *find_tcb(worker_t id, queue_t* q){
     return NULL;
 }
 
-worker_t get_min_elapsed(queue_t* q){
+static worker_t get_min_elapsed(queue_t* q){
     node_t* temp = psjf->p_queue->head;
     int min = 0;
     worker_t min_worker = 0;
@@ -491,7 +547,7 @@ int length(queue_t* q){
     return q->length;
 }
 
-void queue_destroy(queue_t* q){
+static void queue_destroy(queue_t* q){
     node_t* temp;
     while(!is_empty(q)){
         temp = q->head;
@@ -507,7 +563,7 @@ void queue_destroy(queue_t* q){
     }
     free(q);
 }
-void queue_display(queue_t* q){
+static void queue_display(queue_t* q){
     printf("Queue: ");
     node_t* temp = q->head;
     while(temp != NULL){
@@ -518,7 +574,7 @@ void queue_display(queue_t* q){
 }
 
 /*BEGIN: PSJF data structure/library*/
-psjf_t* psjf_init(){
+static psjf_t* psjf_init(){
     //Initialize psjf queue
     psjf_t* s = (psjf_t*)calloc(1, sizeof(psjf_t));
     if (s == NULL){
@@ -548,14 +604,14 @@ psjf_t* psjf_init(){
     return s;
 }
 
-void psjf_destroy(psjf_t* s){
+static void psjf_destroy(psjf_t* s){
     queue_destroy(s->p_queue);
     free(s->sched_stack);
     free(s);
 }
 
 /*Signal/Timer functions*/
-void block_signal()
+static void block_signal()
 {
     sigset_t sm;
     sigemptyset(&sm);
@@ -566,7 +622,7 @@ void block_signal()
     }
 }
 
-void unblock_signal()
+static void unblock_signal()
 {
     sigset_t sm;
     sigemptyset(&sm);
@@ -577,11 +633,11 @@ void unblock_signal()
     }
 }
 
-void timer_handler(int signum, siginfo_t* siginfo, void* ctx) {
+static void timer_handler(int signum, siginfo_t* siginfo, void* ctx) {
     worker_yield();
 }
 
-int init_sig_timer(){
+static int init_sig_timer(){
     
     struct sigaction sa; 
     memset(&sa, 0, sizeof(sa));

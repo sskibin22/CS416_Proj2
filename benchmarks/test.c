@@ -51,6 +51,7 @@ int main(int argc, char** argv){
 		
 
     printf("The final value of x is %d\n", x);
+    print_app_stats();
 
     return 0;
 }
