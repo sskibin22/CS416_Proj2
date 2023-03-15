@@ -23,14 +23,15 @@
 #include <sys/time.h>
 #include <time.h>
 #include <string.h>
+#include <stdatomic.h>
 
 #define STACK_SIZE SIGSTKSZ
 #define QUANTUM 10000 //10 milliseconds
-#define MAX_QUANTS 5
 
 typedef uint worker_t;
 
-typedef enum {READY, SCHEDULED, BLOCKED} state_t;
+typedef enum {READY, SCHEDULED, BLOCKED, EXITED, MAIN} state_t;
+typedef enum {FREE, HELD} lock_t;
 
 typedef struct TCB {
 	/* add important states in a thread control block */
@@ -44,20 +45,19 @@ typedef struct TCB {
 	// YOUR CODE HERE
 	worker_t t_id;
 	state_t t_state;
-    ucontext_t t_ctx;
-	void* t_stack;
 	unsigned int t_prio;
-    suseconds_t elapsed; //long
+	void* t_stack;
+    ucontext_t t_ctx;
+    void *return_value;
+    int elapsed;
 } tcb; 
 
 /* mutex struct definition */
 typedef struct worker_mutex_t {
 	/* add something here */
-	int _lock;
-	unsigned int _count;
-	worker_t _owner;
-	
 	// YOUR CODE HERE
+	lock_t _lock;
+	tcb* _owner;
 } worker_mutex_t;
 
 /* define your data structures here: */
@@ -72,12 +72,11 @@ typedef struct Node{
 typedef struct Queue{
     node_t* head;
     node_t* tail;
+	int length;
 } queue_t;
 
 typedef struct PSJF{
     queue_t* p_queue;
-    struct sigaction sa;
-    struct itimerval timer;
     void* sched_stack;
     ucontext_t sched_ctx;
 } psjf_t;
@@ -111,21 +110,26 @@ int worker_mutex_unlock(worker_mutex_t *mutex);
 /* destroy the mutex */
 int worker_mutex_destroy(worker_mutex_t *mutex);
 
-static void sched_psjf();
-static void sched_mlfq();
 
+int init_main_thread(void);
+void main_thread_func();
 queue_t* queue_init();
 int is_empty(queue_t* q);
 node_t* node_init();
 void enqueue(tcb* t, queue_t* q);
 tcb* dequeue(queue_t* q);
-tcb* remove_at(int id, queue_t* q);
-int exists(int id, queue_t* q);
+tcb* remove_at(worker_t id, queue_t* q);
+tcb *find_tcb(worker_t id, queue_t* q);
+worker_t get_min_elapsed(queue_t* q);
+int length(queue_t* q);
 void queue_destroy(queue_t* q);
 void queue_display(queue_t* q);
 psjf_t* psjf_init();
 void psjf_destroy(psjf_t* s);
+void block_signal();
+void unblock_signal();
 void timer_handler(int signum, siginfo_t* siginfo, void* sig);
+int init_sig_timer();
 
 
 /* Function to print global statistics. Do not modify this function.*/
