@@ -10,7 +10,7 @@
  * You can modify and use this program as much as possible.
  * This will not be graded.
  */
-#define NUM_THREADS 10
+#define NUM_THREADS 5
 worker_t t1, t2, t3, t4;
 int x = 0;
 int loop = 50000;

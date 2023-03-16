@@ -23,12 +23,11 @@
 #include <sys/time.h>
 #include <time.h>
 #include <string.h>
-#include <stdatomic.h>
 
 #define STACK_SIZE SIGSTKSZ
 #define QUANTUM 10000 //10 milliseconds
-#define MLFQ_LEVELS 8
-#define S 20
+#define MLFQ_LEVELS 4
+#define S 250 //0.25 seconds
 
 typedef uint worker_t;
 

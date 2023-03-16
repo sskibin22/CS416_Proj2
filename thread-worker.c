@@ -41,12 +41,15 @@ static worker_t get_min_elapsed(queue_t* q);
 static int length(queue_t* q);
 static void queue_destroy(queue_t* q);
 static void queue_display(queue_t* q);
+static void mlfq_display(queue_t** mq);
 static sched_t* sched_init();
+static void boost_mlfq(queue_t** mq);
 static void sched_destroy(sched_t* s);
 static void block_signal();
 static void unblock_signal();
 static void timer_handler(int signum, siginfo_t* siginfo, void* sig);
 static int init_sig_timer();
+static int power(int base, int exp);
 
 /*Global Variables*/
 int lib_active = 0;
@@ -59,6 +62,7 @@ tcb* main_tcb = NULL;
 double total_turn_time = 0;
 double total_resp_time = 0;
 int total_exited = 0;
+int s_slice = 0;
 
 
 
@@ -415,6 +419,40 @@ static void sched_mlfq() {
 	// (feel free to modify arguments and return types)
 
 	// YOUR CODE HERE
+    /*TODO: figure out a way to adjust time slice for itimer as scheduled threads drop in priority level*/
+    mlfq_display(sched->p_queues);
+    s_slice++;
+    if(s_slice >= S){
+        boost_mlfq(sched->p_queues);
+    }
+    if(scheduled != NULL){
+        scheduled->elapsed++;
+        if(scheduled->elapsed >= power((scheduled->t_prio + 1), 2) && scheduled->t_prio < (MLFQ_LEVELS - 1)){
+            scheduled->elapsed = 0;
+            scheduled->t_prio++;
+        }
+        scheduled->t_state = READY;
+        enqueue(scheduled, sched->p_queues[scheduled->t_prio]);
+    }
+    tcb* temp = NULL;
+    for(int i = 0; i < MLFQ_LEVELS; i++){
+        if(!is_empty(sched->p_queues[i])){
+            temp = dequeue(sched->p_queues[i]);
+            break;
+        }
+    }
+    if(temp != NULL){
+        scheduled = temp;
+        scheduled->t_state = SCHEDULED;
+        if(scheduled->t_scheduled == 0){
+            scheduled->t_scheduled = 1;
+            clock_gettime(CLOCK_REALTIME, &scheduled->start);
+        }
+        tot_cntx_switches++;
+        setcontext(&scheduled->t_ctx);
+    }
+    
+    
 }
 
 //DO NOT MODIFY THIS FUNCTION
@@ -620,6 +658,20 @@ static void queue_display(queue_t* q){
     }
     printf("\n");
 }
+
+static void mlfq_display(queue_t** mq){
+    for(int i = 0; i < MLFQ_LEVELS; i++){
+        printf("Queue: %d |", i+1);
+        node_t* temp = mq[i]->head;
+        while(temp != NULL){
+            printf("id: %d | ", temp->data->t_id);
+            temp = temp->next;
+        }
+        printf("\n");
+    }
+    printf("-------------------------------------------\n");
+}
+
 /*Scheduler functions*/
 static sched_t* sched_init(){
     //Initialize psjf queue
@@ -662,10 +714,19 @@ static sched_t* sched_init(){
 
     return s;
 }
+static void boost_mlfq(queue_t** mq){
+    for(int i = 1; i < MLFQ_LEVELS; i++){
+        while(!is_empty(mq[i])){
+            tcb* t = dequeue(mq[i]);
+            t->t_prio = 0;
+            t->elapsed = 0;
+            enqueue(t, mq[0]);
+        }
+    }
+}
 
 static void sched_destroy(sched_t* s){
     if(SCHEDULER){
-        printf("here: 5\n");
         queue_destroy(s->p_queue);
     }
     else{
@@ -739,5 +800,16 @@ static int init_sig_timer(){
     }
 
     return 0;
+}
+
+static int power(int base, int exp) {
+    if (exp == 0)
+        return 1;
+    else if (exp % 2)
+        return base * power(base, exp - 1);
+    else {
+        int temp = power(base, exp / 2);
+        return temp * temp;
+    }
 }
 
