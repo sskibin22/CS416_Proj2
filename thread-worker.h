@@ -27,6 +27,8 @@
 
 #define STACK_SIZE SIGSTKSZ
 #define QUANTUM 10000 //10 milliseconds
+#define MLFQ_LEVELS 8
+#define S 20
 
 typedef uint worker_t;
 
@@ -80,11 +82,13 @@ typedef struct Queue{
 	int length;
 } queue_t;
 
-typedef struct PSJF{
-    queue_t* p_queue;
+typedef struct Scheduler{
+	queue_t** p_queues;
+	queue_t* p_queue;
     void* sched_stack;
     ucontext_t sched_ctx;
-} psjf_t;
+} sched_t;
+
 
 
 /* Function Declarations: */
