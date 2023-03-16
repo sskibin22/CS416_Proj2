@@ -62,10 +62,10 @@ tcb* main_tcb = NULL;
 double total_turn_time = 0;
 double total_resp_time = 0;
 int total_exited = 0;
-int s_slice = 0;
-
-
-
+long s_sum = 0;
+struct itimerval timer;
+int prev_Q_mult = 1;
+int curr_Q_mult = 1;
 
 
 /* create a new thread */
@@ -419,16 +419,10 @@ static void sched_mlfq() {
 	// (feel free to modify arguments and return types)
 
 	// YOUR CODE HERE
-    /*TODO: figure out a way to adjust time slice for itimer as scheduled threads drop in priority level*/
     mlfq_display(sched->p_queues);
-    s_slice++;
-    if(s_slice >= S){
-        boost_mlfq(sched->p_queues);
-    }
+
     if(scheduled != NULL){
-        scheduled->elapsed++;
-        if(scheduled->elapsed >= power((scheduled->t_prio + 1), 2) && scheduled->t_prio < (MLFQ_LEVELS - 1)){
-            scheduled->elapsed = 0;
+        if(scheduled->t_prio < (MLFQ_LEVELS - 1)){
             scheduled->t_prio++;
         }
         scheduled->t_state = READY;
@@ -438,6 +432,17 @@ static void sched_mlfq() {
     for(int i = 0; i < MLFQ_LEVELS; i++){
         if(!is_empty(sched->p_queues[i])){
             temp = dequeue(sched->p_queues[i]);
+            curr_Q_mult = (i+1);
+            if(curr_Q_mult != prev_Q_mult){
+                prev_Q_mult = curr_Q_mult;
+                timer.it_interval.tv_sec = 0;
+                timer.it_interval.tv_usec = QUANTUM*(power(curr_Q_mult, 2));
+                timer.it_value.tv_sec = 0;
+                timer.it_value.tv_usec = 1;
+                if (setitimer(ITIMER_PROF, &timer, NULL) == - 1) {
+                    perror("setitimer");
+	            }
+            }
             break;
         }
     }
@@ -629,7 +634,8 @@ static worker_t get_min_elapsed(queue_t* q){
     return min_worker;
 }
 
-int length(queue_t* q){
+
+static int length(queue_t* q){
     return q->length;
 }
 
@@ -763,6 +769,14 @@ static void unblock_signal()
 }
 
 static void timer_handler(int signum, siginfo_t* siginfo, void* ctx) {
+    if(!SCHEDULER){
+        getitimer(ITIMER_PROF, &timer);
+        s_sum += ((timer.it_value.tv_sec * 1000) + (timer.it_value.tv_usec / 1000));
+        if(s_sum >= S){
+            s_sum = 0;
+            boost_mlfq(sched->p_queues);
+        }
+    }
     worker_yield();
 }
 
@@ -773,15 +787,11 @@ static int init_sig_timer(){
 	sa.sa_sigaction = timer_handler;
     sa.sa_flags = SA_SIGINFO | SA_RESTART;
 	sigemptyset(&sa.sa_mask);
-	
-    struct sigaction old;
 
-    if (sigaction(SIGPROF, &sa, &old) == -1) {
+    if (sigaction(SIGPROF, &sa, NULL) == -1) {
 	    perror("sigaction");
 	    abort();
     }
-
-    struct itimerval timer;
 
     timer.it_interval.tv_usec = QUANTUM; // 10 milliseconds
 	timer.it_interval.tv_sec = 0; // 0 seconds
@@ -791,11 +801,6 @@ static int init_sig_timer(){
 
 
     if (setitimer(ITIMER_PROF, &timer, NULL) == - 1) {
-	    if (sigaction(SIGPROF, &old, NULL) == -1) {
-	        perror("sigaction");
-	        abort();
-	    }
-
 	    return -1;
     }
 
