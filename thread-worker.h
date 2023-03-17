@@ -25,13 +25,13 @@
 #include <string.h>
 
 #define STACK_SIZE SIGSTKSZ
-#define QUANTUM 10000 //10 milliseconds
+#define QUANTUM 40000 //40 milliseconds
 #define MLFQ_LEVELS 4
 #define S 3000 //3 second
 
 typedef uint worker_t;
 
-typedef enum {READY, SCHEDULED, BLOCKED, EXITED, MAIN} state_t;
+typedef enum {READY, SCHEDULED, BLOCKED, EXITED} state_t;
 typedef enum {FREE, HELD} lock_t;
 
 typedef struct TCB {

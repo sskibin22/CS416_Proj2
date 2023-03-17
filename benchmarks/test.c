@@ -1,3 +1,5 @@
+#define _GNU_SOURCE
+
 #include <stdio.h>
 #include <unistd.h>
 #include <pthread.h>
@@ -11,32 +13,35 @@
  * This will not be graded.
  */
 #define NUM_THREADS 10
-worker_t t1, t2, t3, t4;
 int x = 0;
-int loop = 50000;
 
+        
 void add_counter() {
-    int num = 30000;
-    clock_t start = clock();
-    int i;
+    struct timespec start, end;
+    clock_gettime(CLOCK_REALTIME, &start);
+    int loop = 30000;
 
-    for(i = 0; i < num; i++){
+    for(int i = 0; i < loop; i++){
 	    x = x + 1;
         int t = 0;
-        for(int n = 0; n < num; n++){
+        for(int n = 0; n < loop; n++){
             t++;
         }
     }
     
-    clock_t end = clock();
-    double elapsed = (((double) (end - start)) / CLOCKS_PER_SEC)*1000.0;
-    printf("Time measured: %.2f milliseconds.\n", elapsed);
-    worker_exit(NULL);
+    clock_gettime(CLOCK_REALTIME, &end);
+    double elapsed = ((end.tv_sec - start.tv_sec) * 1000) + ((end.tv_nsec - start.tv_nsec) / 1000000);
+    printf("Time measured: %.2f micro-seconds.\n", elapsed);
+    pthread_exit(NULL);
+    return NULL;
 }
 
 int main(int argc, char** argv){
-    worker_t* threads = (worker_t*)malloc(NUM_THREADS*sizeof(worker_t));
+    struct timespec start_m, end_m;
 
+    pthread_t* threads = (pthread_t*)malloc(NUM_THREADS*sizeof(pthread_t));
+
+    clock_gettime(CLOCK_REALTIME, &start_m);
     for (int i = 0; i < NUM_THREADS; ++i){
         pthread_create(&threads[i], NULL, &add_counter, NULL);
     }
@@ -47,11 +52,13 @@ int main(int argc, char** argv){
         if(pthread_join(threads[j], &res) == 0){
             printf("joined thread %d with result %p\n", threads[j], res);
         }
-    }
-		
+    }	
+    clock_gettime(CLOCK_REALTIME, &end_m);
 
     printf("The final value of x is %d\n", x);
     print_app_stats();
+    double elapsed = ((end_m.tv_sec - start_m.tv_sec)* 1000) + ((end_m.tv_nsec - start_m.tv_nsec) / 1000000);
+    printf("Total Runtime: %.2f micro-seconds.\n", elapsed);
 
     return 0;
 }

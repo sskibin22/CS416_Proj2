@@ -28,7 +28,6 @@ static void schedule();
 static void sched_psjf();
 static void sched_mlfq();
 static int init_main_thread(void);
-static void main_thread_func();
 static queue_t* queue_init();
 static int is_empty(queue_t* q);
 static int mlfq_is_empty(queue_t** mq);
@@ -58,7 +57,6 @@ int id_count = 0;
 sched_t* sched = NULL;
 queue_t* exit_q;
 tcb* scheduled = NULL;
-tcb* main_tcb = NULL;
 double total_turn_time = 0;
 double total_resp_time = 0;
 int total_exited = 0;
@@ -218,7 +216,6 @@ int worker_join(worker_t thread, void **value_ptr) {
         while(temp->t_state != EXITED);
     }
 
-
     block_signal();
     tcb* exit_t = remove_at(thread, exit_q);
     
@@ -258,8 +255,8 @@ int worker_mutex_init(worker_mutex_t *mutex,
 	//- initialize data structures for this mutex
 
 	// YOUR CODE HERE
-    // mutex->_lock = FREE;
-    // mutex->_owner = NULL;
+    mutex->_lock = FREE;
+    mutex->_owner = NULL;
 
 	return 0;
 };
@@ -339,6 +336,7 @@ static void sched_psjf() {
     // else{
     //     printf("sched: %i\n", scheduled->t_id);
     // }
+    
     if(scheduled == NULL){
         /*only one thread in queue*/
         if(length(sched->p_queue) == 1){
@@ -419,7 +417,7 @@ static void sched_mlfq() {
 	// (feel free to modify arguments and return types)
 
 	// YOUR CODE HERE
-    mlfq_display(sched->p_queues);
+    // mlfq_display(sched->p_queues);
 
     if(scheduled != NULL){
         if(scheduled->t_prio < (MLFQ_LEVELS - 1)){
@@ -483,7 +481,7 @@ static int init_main_thread()
     }
     /*initialize tcb fields*/
     m_tcb->t_id = id_count++;
-    m_tcb->t_state = MAIN;
+    m_tcb->t_state = SCHEDULED;
     m_tcb->t_prio = 0;
     m_tcb->elapsed = 0;
     m_tcb->t_scheduled = 1;
@@ -492,25 +490,8 @@ static int init_main_thread()
         perror("getcontext");
         return -1;
     }
-    m_tcb->t_stack = (void*)malloc(STACK_SIZE);
-    if (m_tcb->t_stack == NULL){
-        perror("Failed to allocate tcb->stack");
-        exit(1);
-    }
-    m_tcb->t_ctx.uc_stack.ss_sp = m_tcb->t_stack;
-    m_tcb->t_ctx.uc_stack.ss_size = STACK_SIZE;
-    m_tcb->t_ctx.uc_link = &sched->sched_ctx; //NULL
-    m_tcb->t_ctx.uc_flags = 0;
-    memset(m_tcb->t_ctx.uc_stack.ss_sp, 0, STACK_SIZE);
-    makecontext(&m_tcb->t_ctx, main_thread_func, 0);
-    main_tcb = m_tcb;
     scheduled = m_tcb;
     return 0;
-}
-
-static void main_thread_func(){
-    worker_exit(NULL);
-    return;
 }
 
 /*queue functions*/
