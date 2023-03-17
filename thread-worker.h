@@ -25,9 +25,9 @@
 #include <string.h>
 
 #define STACK_SIZE SIGSTKSZ
-#define QUANTUM 40000 //40 milliseconds
-#define MLFQ_LEVELS 4
-#define S 3000 //3 second
+#define QUANTUM 10000 //10 milliseconds
+#define MLFQ_LEVELS 6
+#define S 3000 //3 seconds
 
 typedef uint worker_t;
 
@@ -58,18 +58,6 @@ typedef struct TCB {
 
 } tcb; 
 
-/* mutex struct definition */
-typedef struct worker_mutex_t {
-	/* add something here */
-	// YOUR CODE HERE
-	lock_t _lock;
-	tcb* _owner;
-} worker_mutex_t;
-
-/* define your data structures here: */
-// Feel free to add your own auxiliary data structures (linked list or queue etc...)
-
-// YOUR CODE HERE
 typedef struct Node{
     tcb* data;
     struct Node* next;
@@ -80,13 +68,27 @@ typedef struct Queue{
     node_t* tail;
 	int length;
 } queue_t;
-
 typedef struct Scheduler{
 	queue_t** p_queues;
 	queue_t* p_queue;
     void* sched_stack;
     ucontext_t sched_ctx;
 } sched_t;
+
+/* mutex struct definition */
+typedef struct worker_mutex_t {
+	/* add something here */
+	// YOUR CODE HERE
+	lock_t _lock;
+	tcb* _owner;
+	queue_t* blocked_q;
+} worker_mutex_t;
+
+/* define your data structures here: */
+// Feel free to add your own auxiliary data structures (linked list or queue etc...)
+
+// YOUR CODE HERE
+
 
 
 

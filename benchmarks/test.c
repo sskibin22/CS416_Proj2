@@ -1,5 +1,3 @@
-#define _GNU_SOURCE
-
 #include <stdio.h>
 #include <unistd.h>
 #include <pthread.h>
@@ -12,17 +10,20 @@
  * You can modify and use this program as much as possible.
  * This will not be graded.
  */
-#define NUM_THREADS 10
+#define NUM_THREADS 4
+pthread_mutex_t mutex;
 int x = 0;
 
         
 void add_counter() {
     struct timespec start, end;
     clock_gettime(CLOCK_REALTIME, &start);
-    int loop = 30000;
+    int loop = 10000;
 
     for(int i = 0; i < loop; i++){
+        pthread_mutex_lock(&mutex);
 	    x = x + 1;
+        pthread_mutex_unlock(&mutex);
         int t = 0;
         for(int n = 0; n < loop; n++){
             t++;
@@ -41,6 +42,7 @@ int main(int argc, char** argv){
 
     pthread_t* threads = (pthread_t*)malloc(NUM_THREADS*sizeof(pthread_t));
 
+    pthread_mutex_init(&mutex, NULL);
     clock_gettime(CLOCK_REALTIME, &start_m);
     for (int i = 0; i < NUM_THREADS; ++i){
         pthread_create(&threads[i], NULL, &add_counter, NULL);
@@ -53,7 +55,9 @@ int main(int argc, char** argv){
             printf("joined thread %d with result %p\n", threads[j], res);
         }
     }	
+    
     clock_gettime(CLOCK_REALTIME, &end_m);
+    pthread_mutex_destroy(&mutex);
 
     printf("The final value of x is %d\n", x);
     print_app_stats();

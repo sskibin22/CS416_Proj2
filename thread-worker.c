@@ -44,8 +44,6 @@ static void mlfq_display(queue_t** mq);
 static sched_t* sched_init();
 static void boost_mlfq(queue_t** mq);
 static void sched_destroy(sched_t* s);
-static void block_signal();
-static void unblock_signal();
 static void timer_handler(int signum, siginfo_t* siginfo, void* sig);
 static int init_sig_timer();
 static int power(int base, int exp);
@@ -64,6 +62,7 @@ long s_sum = 0;
 struct itimerval timer;
 int prev_Q_mult = 1;
 int curr_Q_mult = 1;
+queue_t* global_blocked = NULL;
 
 
 /* create a new thread */
@@ -166,7 +165,6 @@ void worker_exit(void *value_ptr) {
 	// - de-allocate any dynamic memory created when starting this thread
     
 	// YOUR CODE HERE
-    block_signal();
     total_exited++;
     scheduled->return_value = value_ptr;
     scheduled->t_state = EXITED;
@@ -179,8 +177,6 @@ void worker_exit(void *value_ptr) {
         avg_turn_time = total_turn_time / (double)total_exited;
     }
     scheduled = NULL;
-    unblock_signal();
-
 };
 
 
@@ -197,7 +193,7 @@ int worker_join(worker_t thread, void **value_ptr) {
     }
 
 
-    block_signal();
+
     tcb* temp = NULL;
     if(SCHEDULER){
         temp = find_tcb(thread, sched->p_queue);
@@ -210,13 +206,13 @@ int worker_join(worker_t thread, void **value_ptr) {
             }
         }
     }
-    unblock_signal();
+
 
     if(temp != NULL){
         while(temp->t_state != EXITED);
     }
 
-    block_signal();
+
     tcb* exit_t = remove_at(thread, exit_q);
     
     if (exit_t == NULL) {
@@ -245,7 +241,7 @@ int worker_join(worker_t thread, void **value_ptr) {
             first_ctx = 0;
         }
     }
-    unblock_signal();
+
 	return 0;
 };
 
@@ -257,6 +253,8 @@ int worker_mutex_init(worker_mutex_t *mutex,
 	// YOUR CODE HERE
     mutex->_lock = FREE;
     mutex->_owner = NULL;
+    mutex->blocked_q = queue_init();
+    global_blocked = mutex->blocked_q;
 
 	return 0;
 };
@@ -270,6 +268,15 @@ int worker_mutex_lock(worker_mutex_t *mutex) {
         // context switch to the scheduler thread
 
         // YOUR CODE HERE
+        while(__sync_lock_test_and_set(&mutex->_lock, HELD) == HELD){
+            scheduled->t_state = BLOCKED;
+            enqueue(scheduled, mutex->blocked_q);
+            worker_yield();
+        }
+        mutex->_lock = HELD;
+        mutex->_owner = scheduled;
+        
+
         return 0;
 };
 
@@ -280,6 +287,18 @@ int worker_mutex_unlock(worker_mutex_t *mutex) {
 	// so that they could compete for mutex later.
 
 	// YOUR CODE HERE
+    mutex->_lock = FREE;
+    mutex->_owner = NULL;
+    while(!is_empty(mutex->blocked_q)){
+        tcb* temp = dequeue(mutex->blocked_q);
+        if(SCHEDULER){
+            enqueue(temp, sched->p_queue);
+        }
+        else{
+            enqueue(temp, sched->p_queues[temp->t_prio]);
+        }
+    }
+
 	return 0;
 };
 
@@ -287,7 +306,7 @@ int worker_mutex_unlock(worker_mutex_t *mutex) {
 /* destroy the mutex */
 int worker_mutex_destroy(worker_mutex_t *mutex) {
 	// - de-allocate dynamic memory created in worker_mutex_init
-
+    queue_destroy(mutex->blocked_q);
 	return 0;
 };
 
@@ -328,15 +347,11 @@ static void sched_psjf() {
 
 	// YOUR CODE HERE
 
-    /*No thread is currently scheduled (either because no thread has been scheduled yet or a worker thread has exited)*/
-    // queue_display(sched->p_queue);
-    // if(scheduled == NULL){
-    //     printf("sched: NULL\n");
-    // }
-    // else{
-    //     printf("sched: %i\n", scheduled->t_id);
-    // }
-    
+    printf("Ready ");
+    queue_display(sched->p_queue);
+    printf("Blocked ");
+    queue_display(global_blocked);
+
     if(scheduled == NULL){
         /*only one thread in queue*/
         if(length(sched->p_queue) == 1){
@@ -366,44 +381,65 @@ static void sched_psjf() {
     }
     /*One quantum has elapsed prior to the currently scheduled thread exiting*/
     else{
-        scheduled->elapsed++;
-        /*If queue is empty, continue to run currently scheduled thread*/
-        if(is_empty(sched->p_queue)){
-            // printf("id: %i, elapsed: %d quantums\n", scheduled->t_id, scheduled->elapsed);
-            tot_cntx_switches++;
-            setcontext(&scheduled->t_ctx);
-        }
-        /*If there is only one other thread in the queue simply enqueue() currently scheduled and dequeue() next thread to be scheduled*/
-        else if(length(sched->p_queue) == 1){
-            // printf("id: %i, elapsed: %d quantums\n", scheduled->t_id, scheduled->elapsed);
-            scheduled->t_state = READY;
-            enqueue(scheduled, sched->p_queue);
-            scheduled = dequeue(sched->p_queue);
-            scheduled->t_state = SCHEDULED;
-            if(scheduled->t_scheduled == 0){
-                scheduled->t_scheduled = 1;
-                clock_gettime(CLOCK_REALTIME, &scheduled->start);
+        if(scheduled->t_state == BLOCKED){
+            if(length(sched->p_queue) == 1){
+                scheduled = dequeue(sched->p_queue);
+                scheduled->t_state = SCHEDULED;
+                if(scheduled->t_scheduled == 0){
+                    scheduled->t_scheduled = 1;
+                    clock_gettime(CLOCK_REALTIME, &scheduled->start);
+                }
+                tot_cntx_switches++;
+                setcontext(&scheduled->t_ctx);
             }
-            tot_cntx_switches++;
-            setcontext(&scheduled->t_ctx);
+            else{
+                worker_t min_elapsed = get_min_elapsed(sched->p_queue);
+                scheduled = remove_at(min_elapsed, sched->p_queue);
+                scheduled->t_state = SCHEDULED;
+                if(scheduled->t_scheduled == 0){
+                    scheduled->t_scheduled = 1;
+                    clock_gettime(CLOCK_REALTIME, &scheduled->start);
+                }
+                tot_cntx_switches++;
+                setcontext(&scheduled->t_ctx);
+            }
         }
-        /*If length of queue > 1:
-         *1) enqueue() currently scheduled thread
-         *2) find and schedule thread with the minimum elapsed quantums
-        */
         else{
-            // printf("id: %i, elapsed: %d quantums\n", scheduled->t_id, scheduled->elapsed);
-            scheduled->t_state = READY;
-            enqueue(scheduled, sched->p_queue);
-            worker_t min_elapsed = get_min_elapsed(sched->p_queue);
-            scheduled = remove_at(min_elapsed, sched->p_queue);
-            scheduled->t_state = SCHEDULED;
-            if(scheduled->t_scheduled == 0){
-                scheduled->t_scheduled = 1;
-                clock_gettime(CLOCK_REALTIME, &scheduled->start);
+            /*If queue is empty, continue to run currently scheduled thread*/
+            if(is_empty(sched->p_queue)){
+                tot_cntx_switches++;
+                setcontext(&scheduled->t_ctx);
             }
-            tot_cntx_switches++;
-            setcontext(&scheduled->t_ctx);
+            /*If there is only one other thread in the queue simply enqueue() currently scheduled and dequeue() next thread to be scheduled*/
+            else if(length(sched->p_queue) == 1){
+                scheduled->t_state = READY;
+                enqueue(scheduled, sched->p_queue);
+                scheduled = dequeue(sched->p_queue);
+                scheduled->t_state = SCHEDULED;
+                if(scheduled->t_scheduled == 0){
+                    scheduled->t_scheduled = 1;
+                    clock_gettime(CLOCK_REALTIME, &scheduled->start);
+                }
+                tot_cntx_switches++;
+                setcontext(&scheduled->t_ctx);
+            }
+            /*If length of queue > 1:
+            *1) enqueue() currently scheduled thread
+            *2) find and schedule thread with the minimum elapsed quantums
+            */
+            else{
+                scheduled->t_state = READY;
+                enqueue(scheduled, sched->p_queue);
+                worker_t min_elapsed = get_min_elapsed(sched->p_queue);
+                scheduled = remove_at(min_elapsed, sched->p_queue);
+                scheduled->t_state = SCHEDULED;
+                if(scheduled->t_scheduled == 0){
+                    scheduled->t_scheduled = 1;
+                    clock_gettime(CLOCK_REALTIME, &scheduled->start);
+                }
+                tot_cntx_switches++;
+                setcontext(&scheduled->t_ctx);
+            }
         }
         
     }
@@ -417,7 +453,10 @@ static void sched_mlfq() {
 	// (feel free to modify arguments and return types)
 
 	// YOUR CODE HERE
-    // mlfq_display(sched->p_queues);
+    printf("Ready ");
+    mlfq_display(sched->p_queues);
+    printf("Blocked ");
+    queue_display(global_blocked);
 
     if(scheduled != NULL){
         if(scheduled->t_prio < (MLFQ_LEVELS - 1)){
@@ -637,6 +676,9 @@ static void queue_destroy(queue_t* q){
     free(q);
 }
 static void queue_display(queue_t* q){
+    if(q == NULL){
+        return;
+    }
     printf("Queue: ");
     node_t* temp = q->head;
     while(temp != NULL){
@@ -727,27 +769,27 @@ static void sched_destroy(sched_t* s){
 }
 
 /*Signal/Timer functions*/
-static void block_signal()
-{
-    sigset_t sm;
-    sigemptyset(&sm);
-    sigaddset(&sm, SIGPROF);
-    if (sigprocmask(SIG_BLOCK, &sm, NULL) == -1) {
-	    perror("sigprocmask");
-	    abort();
-    }
-}
+// static void block_signal()
+// {
+//     sigset_t sm;
+//     sigemptyset(&sm);
+//     sigaddset(&sm, SIGPROF);
+//     if (sigprocmask(SIG_BLOCK, &sm, NULL) == -1) {
+// 	    perror("sigprocmask");
+// 	    abort();
+//     }
+// }
 
-static void unblock_signal()
-{
-    sigset_t sm;
-    sigemptyset(&sm);
-    sigaddset(&sm, SIGPROF);
-    if (sigprocmask(SIG_UNBLOCK, &sm, NULL) == -1) {
-	    perror("sigprocmask");
-	    abort();
-    }
-}
+// static void unblock_signal()
+// {
+//     sigset_t sm;
+//     sigemptyset(&sm);
+//     sigaddset(&sm, SIGPROF);
+//     if (sigprocmask(SIG_UNBLOCK, &sm, NULL) == -1) {
+// 	    perror("sigprocmask");
+// 	    abort();
+//     }
+// }
 
 static void timer_handler(int signum, siginfo_t* siginfo, void* ctx) {
     if(!SCHEDULER){
@@ -757,6 +799,9 @@ static void timer_handler(int signum, siginfo_t* siginfo, void* ctx) {
             s_sum = 0;
             boost_mlfq(sched->p_queues);
         }
+    }
+    if(scheduled != NULL){
+        scheduled->elapsed++;
     }
     worker_yield();
 }
