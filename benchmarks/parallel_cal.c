@@ -52,7 +52,7 @@ void verify() {
 	for (j = 0; j < R_SIZE; j += 1) {
 		sum += pSum[j];
 	}
-	//printf("verified sum is: %d\n", sum);
+	printf("verified sum is: %d\n", sum);
 }
 
 int main(int argc, char **argv) {
@@ -103,15 +103,15 @@ int main(int argc, char **argv) {
 
         printf("Total run time: %lu micro-seconds\n", 
 	       (end.tv_sec - start.tv_sec) * 1000 + (end.tv_nsec - start.tv_nsec) / 1000000);
-
 	// mutex destroy
 	pthread_mutex_destroy(&mutex);
-
 	// feel free to verify your answer here:
 	verify();
 	// Free memory on Heap
+
 	free(thread);
 	free(counter);
+
 	
 	for (i = 0; i < R_SIZE; ++i)
 		free(a[i]);

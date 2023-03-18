@@ -44,13 +44,15 @@ static void mlfq_display(queue_t** mq);
 static sched_t* sched_init();
 static void boost_mlfq(queue_t** mq);
 static void sched_destroy(sched_t* s);
+static void block_signal();
+static void unblock_signal();
 static void timer_handler(int signum, siginfo_t* siginfo, void* sig);
 static int init_sig_timer();
 static int power(int base, int exp);
 
 /*Global Variables*/
 int lib_active = 0;
-int first_ctx = 0;
+int first_ctx = 1;
 int id_count = 0;
 sched_t* sched = NULL;
 queue_t* exit_q;
@@ -89,6 +91,7 @@ int worker_create(worker_t * thread, pthread_attr_t * attr,
         init_sig_timer();
         lib_active = 1;
 	}
+
     /*allocate space for tcb*/
 	tcb* _tcb = (tcb*)calloc(1, sizeof(tcb));
 	if (_tcb == NULL){
@@ -119,10 +122,10 @@ int worker_create(worker_t * thread, pthread_attr_t * attr,
 	memset(_tcb->t_ctx.uc_stack.ss_sp, 0, STACK_SIZE);
 
 	if(arg == NULL){
-		makecontext(&_tcb->t_ctx, function, 0);
+		makecontext(&_tcb->t_ctx, (void*)function, 0);
 	}
 	else{
-		makecontext(&_tcb->t_ctx, function, 1, arg);
+		makecontext(&_tcb->t_ctx, (void*)function, 1, arg);
 	}    
 	
     /*enqueue tcb to ready queue*/
@@ -193,16 +196,25 @@ int worker_join(worker_t thread, void **value_ptr) {
     }
 
 
-
     tcb* temp = NULL;
     if(SCHEDULER){
         temp = find_tcb(thread, sched->p_queue);
+        if(temp == NULL){
+            if(scheduled != NULL && scheduled->t_id == thread){
+                temp = scheduled;
+            }
+        }
     }
     else{
         for(int i = 0; i < MLFQ_LEVELS; i++){
             temp = find_tcb(thread, sched->p_queues[i]);
             if(temp != NULL){
                 break;
+            }
+        }
+        if(temp == NULL){
+            if(scheduled != NULL && scheduled->t_id == thread){
+                temp = scheduled;
             }
         }
     }
@@ -224,6 +236,7 @@ int worker_join(worker_t thread, void **value_ptr) {
         }
         free(exit_t->t_stack);
         free(exit_t);
+        // printf("Thread %i joined\n", thread);
     }
     if(SCHEDULER){
         if(scheduled == NULL && (is_empty(sched->p_queue) && is_empty(exit_q))){
@@ -241,6 +254,7 @@ int worker_join(worker_t thread, void **value_ptr) {
             first_ctx = 0;
         }
     }
+
 
 	return 0;
 };
@@ -306,6 +320,7 @@ int worker_mutex_unlock(worker_mutex_t *mutex) {
 /* destroy the mutex */
 int worker_mutex_destroy(worker_mutex_t *mutex) {
 	// - de-allocate dynamic memory created in worker_mutex_init
+    
     queue_destroy(mutex->blocked_q);
 	return 0;
 };
@@ -347,10 +362,10 @@ static void sched_psjf() {
 
 	// YOUR CODE HERE
 
-    printf("Ready ");
-    queue_display(sched->p_queue);
-    printf("Blocked ");
-    queue_display(global_blocked);
+    // printf("Ready ");
+    // queue_display(sched->p_queue);
+    // printf("Blocked ");
+    // queue_display(global_blocked);
 
     if(scheduled == NULL){
         /*only one thread in queue*/
@@ -381,6 +396,20 @@ static void sched_psjf() {
     }
     /*One quantum has elapsed prior to the currently scheduled thread exiting*/
     else{
+        if(scheduled->t_id == 0 && is_empty(sched->p_queue)){
+            timer.it_interval.tv_usec = 0; // 10 milliseconds
+	        timer.it_interval.tv_sec = 0; // 0 seconds
+
+            timer.it_value.tv_usec = 0; // 1 microsecond
+	        timer.it_value.tv_sec = 0; // 0 seconds
+
+
+            if (setitimer(ITIMER_PROF, &timer, NULL) == - 1) {
+	            perror("setitimer");
+            }
+            tot_cntx_switches++;
+            setcontext(&scheduled->t_ctx);
+        }
         if(scheduled->t_state == BLOCKED){
             if(length(sched->p_queue) == 1){
                 scheduled = dequeue(sched->p_queue);
@@ -453,12 +482,36 @@ static void sched_mlfq() {
 	// (feel free to modify arguments and return types)
 
 	// YOUR CODE HERE
-    printf("Ready ");
-    mlfq_display(sched->p_queues);
-    printf("Blocked ");
-    queue_display(global_blocked);
+    // if(scheduled != NULL){
+    //     printf("scheduled: %d\n", scheduled->t_id);
+    // }
+    // else{
+    //     printf("scheduled: NULL\n");
+    // }
+    // printf("Ready: \n");
+    // mlfq_display(sched->p_queues);
+    // printf("Exit ");
+    // queue_display(exit_q);
+    // printf("\n");
+    
+    // printf("Blocked ");
+    // queue_display(global_blocked);
 
-    if(scheduled != NULL){
+    if(scheduled != NULL && scheduled->t_state != BLOCKED){
+        if(scheduled->t_id == 0 && mlfq_is_empty(sched->p_queues)){
+            timer.it_interval.tv_usec = 0; // 10 milliseconds
+	        timer.it_interval.tv_sec = 0; // 0 seconds
+
+            timer.it_value.tv_usec = 0; // 1 microsecond
+	        timer.it_value.tv_sec = 0; // 0 seconds
+
+
+            if (setitimer(ITIMER_PROF, &timer, NULL) == - 1) {
+	            perror("setitimer");
+            }
+            tot_cntx_switches++;
+            setcontext(&scheduled->t_ctx);
+        }
         if(scheduled->t_prio < (MLFQ_LEVELS - 1)){
             scheduled->t_prio++;
         }
@@ -475,7 +528,7 @@ static void sched_mlfq() {
                 timer.it_interval.tv_sec = 0;
                 timer.it_interval.tv_usec = QUANTUM*(power(curr_Q_mult, 2));
                 timer.it_value.tv_sec = 0;
-                timer.it_value.tv_usec = 1;
+                timer.it_value.tv_usec = QUANTUM*(power(curr_Q_mult, 2));
                 if (setitimer(ITIMER_PROF, &timer, NULL) == - 1) {
                     perror("setitimer");
 	            }
@@ -483,6 +536,7 @@ static void sched_mlfq() {
             break;
         }
     }
+    block_signal();
     if(temp != NULL){
         scheduled = temp;
         scheduled->t_state = SCHEDULED;
@@ -493,8 +547,7 @@ static void sched_mlfq() {
         tot_cntx_switches++;
         setcontext(&scheduled->t_ctx);
     }
-    
-    
+        
 }
 
 //DO NOT MODIFY THIS FUNCTION
@@ -659,6 +712,14 @@ static int length(queue_t* q){
     return q->length;
 }
 
+static int mlfq_length(queue_t** mq){
+    int sum = 0;
+    for(int i = 0; i < MLFQ_LEVELS; i++){
+        sum += length(mq[i]);
+    }
+    return sum;
+}
+
 static void queue_destroy(queue_t* q){
     node_t* temp;
     while(!is_empty(q)){
@@ -769,27 +830,27 @@ static void sched_destroy(sched_t* s){
 }
 
 /*Signal/Timer functions*/
-// static void block_signal()
-// {
-//     sigset_t sm;
-//     sigemptyset(&sm);
-//     sigaddset(&sm, SIGPROF);
-//     if (sigprocmask(SIG_BLOCK, &sm, NULL) == -1) {
-// 	    perror("sigprocmask");
-// 	    abort();
-//     }
-// }
+static void block_signal()
+{
+    sigset_t sm;
+    sigemptyset(&sm);
+    sigaddset(&sm, SIGPROF);
+    if (sigprocmask(SIG_BLOCK, &sm, NULL) == -1) {
+	    perror("sigprocmask");
+	    abort();
+    }
+}
 
-// static void unblock_signal()
-// {
-//     sigset_t sm;
-//     sigemptyset(&sm);
-//     sigaddset(&sm, SIGPROF);
-//     if (sigprocmask(SIG_UNBLOCK, &sm, NULL) == -1) {
-// 	    perror("sigprocmask");
-// 	    abort();
-//     }
-// }
+static void unblock_signal()
+{
+    sigset_t sm;
+    sigemptyset(&sm);
+    sigaddset(&sm, SIGPROF);
+    if (sigprocmask(SIG_UNBLOCK, &sm, NULL) == -1) {
+	    perror("sigprocmask");
+	    abort();
+    }
+}
 
 static void timer_handler(int signum, siginfo_t* siginfo, void* ctx) {
     if(!SCHEDULER){

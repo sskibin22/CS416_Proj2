@@ -10,7 +10,7 @@
  * You can modify and use this program as much as possible.
  * This will not be graded.
  */
-#define NUM_THREADS 4
+#define NUM_THREADS 6
 pthread_mutex_t mutex;
 int x = 0;
 
@@ -18,7 +18,7 @@ int x = 0;
 void add_counter() {
     struct timespec start, end;
     clock_gettime(CLOCK_REALTIME, &start);
-    int loop = 10000;
+    int loop = 30000;
 
     for(int i = 0; i < loop; i++){
         pthread_mutex_lock(&mutex);

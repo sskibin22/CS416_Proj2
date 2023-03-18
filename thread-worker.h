@@ -26,8 +26,8 @@
 
 #define STACK_SIZE SIGSTKSZ
 #define QUANTUM 10000 //10 milliseconds
-#define MLFQ_LEVELS 6
-#define S 3000 //3 seconds
+#define MLFQ_LEVELS 4 //or 8
+#define S 3000 //3 seconds (floor: 0.25 seconds(250), ceiling: 5 seconds)
 
 typedef uint worker_t;
 
@@ -88,9 +88,6 @@ typedef struct worker_mutex_t {
 // Feel free to add your own auxiliary data structures (linked list or queue etc...)
 
 // YOUR CODE HERE
-
-
-
 
 /* Function Declarations: */
 
