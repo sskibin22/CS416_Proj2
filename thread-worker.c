@@ -55,6 +55,7 @@ int lib_active = 0; //bool for whether or not the thread library has been activa
 int id_count = 0; //updates whenever a new thread is requested by worker_thread_create()
 sched_t* sched = NULL; //structure to store scheduler information
 queue_t* exit_q; //exit queue to track all exited threads
+queue_t* blocked_q; //blocked queue to track all threads waiting to hold lock once it is freed
 tcb* scheduled = NULL; //tcb pointer to track currently scheduled thread
 double total_turn_time = 0; //stores on-going total turnaround time as threads exit
 double total_resp_time = 0; //stores on-going total response time as threads exit
@@ -80,6 +81,7 @@ int worker_create(worker_t * thread, pthread_attr_t * attr,
 
 	/*Initialize scheduler/queues, main thread, and initialize timer if first call to library*/
 	if(lib_active == 0){
+        lib_active = 1;
         /*Initialize scheduler struct*/
         sched = sched_init();
         /*Initialize exit queue*/
@@ -88,7 +90,6 @@ int worker_create(worker_t * thread, pthread_attr_t * attr,
         init_main_thread();
         /*Initialize quantum timer*/
         init_sig_timer();
-        lib_active = 1;
 	}
 
     /*allocate space for tcb*/
@@ -196,18 +197,16 @@ int worker_join(worker_t thread, void **value_ptr) {
   
 	// YOUR CODE HERE
     /*If given thread id does not exist return error code -1*/
-    if (thread < 0) {
+    if (thread < 0 || thread >= id_count) {
         perror("No thread exists");
         return -1;
     }
-    /*Find out if the given thread is still on the ready queue or not*/
+    /*Find out if the given thread is still on the ready queue/blocked queue or not*/
     tcb* temp = NULL;
     if(SCHEDULER){
         temp = find_tcb(thread, sched->p_queue);
-        if(temp == NULL){
-            if(scheduled != NULL && scheduled->t_id == thread){
-                temp = scheduled;
-            }
+        if(temp == NULL && blocked_q != NULL){
+            temp = find_tcb(thread, blocked_q);
         }
     }
     else{
@@ -217,10 +216,8 @@ int worker_join(worker_t thread, void **value_ptr) {
                 break;
             }
         }
-        if(temp == NULL){
-            if(scheduled != NULL && scheduled->t_id == thread){
-                temp = scheduled;
-            }
+        if(temp == NULL && blocked_q != NULL){
+            temp = find_tcb(thread, blocked_q);
         }
     }
 
@@ -268,8 +265,11 @@ int worker_mutex_init(worker_mutex_t *mutex,
 	// YOUR CODE HERE
     mutex->_lock = FREE;
     mutex->_owner = NULL;
-    mutex->blocked_q = queue_init();
-
+    // mutex->blocked_q = queue_init();
+    if(blocked_q == NULL){
+        blocked_q = queue_init();
+    }
+    
 	return 0;
 };
 
@@ -285,14 +285,13 @@ int worker_mutex_lock(worker_mutex_t *mutex) {
         /*While a lock is held by another thread place scheduled thread on blocked queue and yield the cpu to the scheduler*/
         while(__sync_lock_test_and_set(&mutex->_lock, HELD) == HELD){
             scheduled->t_state = BLOCKED;
-            enqueue(scheduled, mutex->blocked_q);
+            enqueue(scheduled, blocked_q);
             worker_yield();
         }
         /*If the lock is FREE give it to the scheduled thread that wants it*/
         mutex->_lock = HELD;
         mutex->_owner = scheduled;
         
-
         return 0;
 };
 
@@ -307,8 +306,8 @@ int worker_mutex_unlock(worker_mutex_t *mutex) {
     mutex->_lock = FREE;
     mutex->_owner = NULL;
     /*Place all blocked threads back onto the ready queue*/
-    while(!is_empty(mutex->blocked_q)){
-        tcb* temp = dequeue(mutex->blocked_q);
+    while(!is_empty(blocked_q)){
+        tcb* temp = dequeue(blocked_q);
         temp->t_state = READY;
         if(SCHEDULER){
             enqueue(temp, sched->p_queue);
@@ -327,7 +326,7 @@ int worker_mutex_destroy(worker_mutex_t *mutex) {
 	// - de-allocate dynamic memory created in worker_mutex_init
     mutex->_lock = FREE;
     mutex->_owner = NULL;
-    queue_destroy(mutex->blocked_q);
+    queue_destroy(blocked_q);
 	return 0;
 };
 
@@ -368,12 +367,6 @@ static void sched_psjf() {
 	// (feel free to modify arguments and return types)
 
 	// YOUR CODE HERE
-
-    // printf("Ready ");
-    // queue_display(sched->p_queue);
-    // printf("Blocked ");
-    // queue_display(global_blocked);
-
     /*No thread is currently scheduled (a thread has exited and set scheduled to NULL)*/
     if(scheduled == NULL){
         /*only one thread in queue*/
@@ -407,11 +400,11 @@ static void sched_psjf() {
     else{
         /*If main thread is the last one running disable timer interupt and set context to main thread to finish out main caller program.*/
         if(scheduled->t_id == 0 && is_empty(sched->p_queue)){
-            timer.it_interval.tv_usec = 0; // 10 milliseconds
-	        timer.it_interval.tv_sec = 0; // 0 seconds
+            timer.it_interval.tv_usec = 0; 
+	        timer.it_interval.tv_sec = 0; 
 
-            timer.it_value.tv_usec = 0; // 1 microsecond
-	        timer.it_value.tv_sec = 0; // 0 seconds
+            timer.it_value.tv_usec = 0; 
+	        timer.it_value.tv_sec = 0; 
 
 
             if (setitimer(ITIMER_PROF, &timer, NULL) == - 1) {
@@ -502,30 +495,15 @@ static void sched_mlfq() {
 	// (feel free to modify arguments and return types)
 
 	// YOUR CODE HERE
-    // if(scheduled != NULL){
-    //     printf("scheduled: %d\n", scheduled->t_id);
-    // }
-    // else{
-    //     printf("scheduled: NULL\n");
-    // }
-    // printf("Ready: \n");
-    // mlfq_display(sched->p_queues);
-    // printf("Exit ");
-    // queue_display(exit_q);
-    // printf("\n");
-    
-    // printf("Blocked ");
-    // queue_display(global_blocked);
-
     /*If scheduled has spent a full time quantum decrease priority level and place on priority queue*/
     if(scheduled != NULL && scheduled->t_state != BLOCKED){
         /*If main thread is the last one running disable timer interupt and set context to main thread to finish out main caller program.*/
         if(scheduled->t_id == 0 && mlfq_is_empty(sched->p_queues)){
-            timer.it_interval.tv_usec = 0; // 10 milliseconds
-	        timer.it_interval.tv_sec = 0; // 0 seconds
+            timer.it_interval.tv_usec = 0; 
+	        timer.it_interval.tv_sec = 0; 
 
-            timer.it_value.tv_usec = 0; // 1 microsecond
-	        timer.it_value.tv_sec = 0; // 0 seconds
+            timer.it_value.tv_usec = 0; 
+	        timer.it_value.tv_sec = 0; 
 
 
             if (setitimer(ITIMER_PROF, &timer, NULL) == - 1) {

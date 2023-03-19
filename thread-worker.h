@@ -28,7 +28,7 @@
 #define STACK_SIZE SIGSTKSZ
 #define QUANTUM 10000 //10 milliseconds
 #define MLFQ_LEVELS 4 //or 8
-#define S 3000 //3 seconds (floor: 0.25 seconds(250), ceiling: 5 seconds)
+#define S 1000 //1 second (floor: 0.25 seconds(250), ceiling: 5 seconds)
 
 typedef uint worker_t;
 
@@ -87,7 +87,6 @@ typedef struct worker_mutex_t {
 	// YOUR CODE HERE
 	lock_t _lock; //lock states: FREE, HELD
 	tcb* _owner; //pointer to tcb that currently holds the lock
-	queue_t* blocked_q; //blocked queue to track all threads waiting to hold lock once it is freed
 } worker_mutex_t;
 
 
