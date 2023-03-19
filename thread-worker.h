@@ -24,6 +24,7 @@
 #include <time.h>
 #include <string.h>
 
+
 #define STACK_SIZE SIGSTKSZ
 #define QUANTUM 10000 //10 milliseconds
 #define MLFQ_LEVELS 4 //or 8
@@ -31,6 +32,7 @@
 
 typedef uint worker_t;
 
+/*enums for thread and mutex states*/
 typedef enum {READY, SCHEDULED, BLOCKED, EXITED} state_t;
 typedef enum {FREE, HELD} lock_t;
 
@@ -44,48 +46,51 @@ typedef struct TCB {
 	// And more ...
 
 	// YOUR CODE HERE
-	worker_t t_id;
-	state_t t_state;
-	unsigned int t_prio;
-	void* t_stack;
-    ucontext_t t_ctx;
-    void *return_value;
-    int elapsed;
-	struct timespec arrival;
-	struct timespec start;
-	struct timespec completion;
-	int t_scheduled;
-
+	worker_t t_id; //unique id for worker thread
+	state_t t_state; //state: READY, SHCEDULED, BLOCKED, EXITED
+	unsigned int t_prio; //priority level relevent to MLFQ scheduler
+	void* t_stack; //address of stack pointer for worker thread
+    ucontext_t t_ctx; //context of thread
+    void *return_value; //return value when exiting from routine
+    int elapsed; //total time quantums elapsed relevant to PSJF scheduler
+	struct timespec arrival; //arrival time
+	struct timespec start; //first scheduled time
+	struct timespec completion; //thread completion time (when exited)
+	int t_scheduled; //if t_scheduled == 0, thread has not been scheduled yet
 } tcb; 
 
+/* define your data structures here: */
+// Feel free to add your own auxiliary data structures (linked list or queue etc...)
+
+/*Node structure to store thread tcb's in queue*/
 typedef struct Node{
     tcb* data;
     struct Node* next;
 } node_t;
-
+/*simple queue structure*/
 typedef struct Queue{
     node_t* head;
     node_t* tail;
 	int length;
 } queue_t;
+/*scheduler structure */
 typedef struct Scheduler{
-	queue_t** p_queues;
-	queue_t* p_queue;
-    void* sched_stack;
-    ucontext_t sched_ctx;
+	queue_t** p_queues; //Multi-level feedback priority queues for MLFQ scheduler
+	queue_t* p_queue; //single queue for PSJF scheduler
+    void* sched_stack; //address of scheduler stack pointer
+    ucontext_t sched_ctx; //scheduler context
 } sched_t;
 
 /* mutex struct definition */
 typedef struct worker_mutex_t {
 	/* add something here */
 	// YOUR CODE HERE
-	lock_t _lock;
-	tcb* _owner;
-	queue_t* blocked_q;
+	lock_t _lock; //lock states: FREE, HELD
+	tcb* _owner; //pointer to tcb that currently holds the lock
+	queue_t* blocked_q; //blocked queue to track all threads waiting to hold lock once it is freed
 } worker_mutex_t;
 
-/* define your data structures here: */
-// Feel free to add your own auxiliary data structures (linked list or queue etc...)
+
 
 // YOUR CODE HERE
 

@@ -51,20 +51,19 @@ static int init_sig_timer();
 static int power(int base, int exp);
 
 /*Global Variables*/
-int lib_active = 0;
-int first_ctx = 1;
-int id_count = 0;
-sched_t* sched = NULL;
-queue_t* exit_q;
-tcb* scheduled = NULL;
-double total_turn_time = 0;
-double total_resp_time = 0;
-int total_exited = 0;
-long s_sum = 0;
-struct itimerval timer;
-int prev_Q_mult = 1;
+int lib_active = 0; //bool for whether or not the thread library has been activated or not
+int id_count = 0; //updates whenever a new thread is requested by worker_thread_create()
+sched_t* sched = NULL; //structure to store scheduler information
+queue_t* exit_q; //exit queue to track all exited threads
+tcb* scheduled = NULL; //tcb pointer to track currently scheduled thread
+double total_turn_time = 0; //stores on-going total turnaround time as threads exit
+double total_resp_time = 0; //stores on-going total response time as threads exit
+int total_exited = 0; //tracks how many threads have exited for calculating average turnaround/response times
+long s_sum = 0; //if s_sum >= S boost all threads in MLFQ to highest priority level
+struct itimerval timer; //stores timer information for preemptive scheduler QUANTUM
+/*track QUANTUM multiplier for priority levels on MLFQ*/
+int prev_Q_mult = 1; 
 int curr_Q_mult = 1;
-queue_t* global_blocked = NULL;
 
 
 /* create a new thread */
@@ -113,7 +112,7 @@ int worker_create(worker_t * thread, pthread_attr_t * attr,
 	_tcb->t_stack = (void*)malloc(STACK_SIZE);
 	if (_tcb->t_stack == NULL){
 		perror("Failed to allocate tcb->stack");
-		exit(1);
+		return -1;
 	}
 	_tcb->t_ctx.uc_stack.ss_sp = _tcb->t_stack;
 	_tcb->t_ctx.uc_stack.ss_size = STACK_SIZE;
@@ -135,7 +134,7 @@ int worker_create(worker_t * thread, pthread_attr_t * attr,
     else{
         enqueue(_tcb, sched->p_queues[0]);
     }
-	
+	/*track arrival time of newly created thread*/
     clock_gettime(CLOCK_REALTIME, &_tcb->arrival);
 
 	return 0;
@@ -149,13 +148,15 @@ int worker_yield() {
 	// - switch from thread context to scheduler context
 
 	// YOUR CODE HERE
+    /*Increment total context switches counter*/
     tot_cntx_switches++;
+    /*If no thread is currently scheduled set the scheduler context*/
     if(scheduled == NULL){
         if(setcontext(&sched->sched_ctx) < 0){
             return -1;
         }
     }
-
+    /*save currently scheduled threads context and set scheduler context*/
 	if(swapcontext(&scheduled->t_ctx, &sched->sched_ctx) < 0){
         return -1;
     }
@@ -168,17 +169,21 @@ void worker_exit(void *value_ptr) {
 	// - de-allocate any dynamic memory created when starting this thread
     
 	// YOUR CODE HERE
+    /*Increment thread exited counter*/
     total_exited++;
+    /*Set thread return_value to value_ptr*/
     scheduled->return_value = value_ptr;
+    /*Set thread state to EXITED*/
     scheduled->t_state = EXITED;
+    /*Get completion time of thread and enqeue to exit queue*/
     clock_gettime(CLOCK_REALTIME, &scheduled->completion);
     enqueue(scheduled, exit_q);
-    if(scheduled->t_id != 0){
-        total_resp_time += (scheduled->start.tv_sec - scheduled->arrival.tv_sec) * 1000 + (scheduled->start.tv_nsec - scheduled->arrival.tv_nsec) / 1000000;
-        total_turn_time += (scheduled->completion.tv_sec - scheduled->arrival.tv_sec) * 1000 + (scheduled->completion.tv_nsec - scheduled->arrival.tv_nsec) / 1000000;
-        avg_resp_time = total_resp_time / (double)total_exited;
-        avg_turn_time = total_turn_time / (double)total_exited;
-    }
+    /*calculate ongoing average turnaround and response time stats*/
+    total_resp_time += (scheduled->start.tv_sec - scheduled->arrival.tv_sec) * 1000 + (scheduled->start.tv_nsec - scheduled->arrival.tv_nsec) / 1000000;
+    total_turn_time += (scheduled->completion.tv_sec - scheduled->arrival.tv_sec) * 1000 + (scheduled->completion.tv_nsec - scheduled->arrival.tv_nsec) / 1000000;
+    avg_resp_time = total_resp_time / (double)total_exited;
+    avg_turn_time = total_turn_time / (double)total_exited;
+    /*set scheduled to NULL*/
     scheduled = NULL;
 };
 
@@ -190,12 +195,12 @@ int worker_join(worker_t thread, void **value_ptr) {
 	// - de-allocate any dynamic memory created by the joining thread
   
 	// YOUR CODE HERE
+    /*If given thread id does not exist return error code -1*/
     if (thread < 0) {
         perror("No thread exists");
         return -1;
     }
-
-
+    /*Find out if the given thread is still on the ready queue or not*/
     tcb* temp = NULL;
     if(SCHEDULER){
         temp = find_tcb(thread, sched->p_queue);
@@ -219,14 +224,14 @@ int worker_join(worker_t thread, void **value_ptr) {
         }
     }
 
-
+    /*If the thread is found on the ready queue wait for the thread to exit*/
     if(temp != NULL){
         while(temp->t_state != EXITED);
     }
 
-
+    /*If thread is not found on the ready queue then it has already exited*/
+    /*remove thread from the exit queue, set value_ptr if it exists, and free dynamic memory*/
     tcb* exit_t = remove_at(thread, exit_q);
-    
     if (exit_t == NULL) {
         return 0;
     } 
@@ -236,14 +241,13 @@ int worker_join(worker_t thread, void **value_ptr) {
         }
         free(exit_t->t_stack);
         free(exit_t);
-        // printf("Thread %i joined\n", thread);
     }
+    /*If the final thread has exited and joined successfully free all dynamic memory used in the library and reset*/
     if(SCHEDULER){
         if(scheduled == NULL && (is_empty(sched->p_queue) && is_empty(exit_q))){
             sched_destroy(sched);
             queue_destroy(exit_q);
             lib_active = 0;
-            first_ctx = 0;
         }
     }
     else{
@@ -251,11 +255,8 @@ int worker_join(worker_t thread, void **value_ptr) {
             sched_destroy(sched);
             queue_destroy(exit_q);
             lib_active = 0;
-            first_ctx = 0;
         }
     }
-
-
 	return 0;
 };
 
@@ -268,7 +269,6 @@ int worker_mutex_init(worker_mutex_t *mutex,
     mutex->_lock = FREE;
     mutex->_owner = NULL;
     mutex->blocked_q = queue_init();
-    global_blocked = mutex->blocked_q;
 
 	return 0;
 };
@@ -282,11 +282,13 @@ int worker_mutex_lock(worker_mutex_t *mutex) {
         // context switch to the scheduler thread
 
         // YOUR CODE HERE
+        /*While a lock is held by another thread place scheduled thread on blocked queue and yield the cpu to the scheduler*/
         while(__sync_lock_test_and_set(&mutex->_lock, HELD) == HELD){
             scheduled->t_state = BLOCKED;
             enqueue(scheduled, mutex->blocked_q);
             worker_yield();
         }
+        /*If the lock is FREE give it to the scheduled thread that wants it*/
         mutex->_lock = HELD;
         mutex->_owner = scheduled;
         
@@ -301,10 +303,13 @@ int worker_mutex_unlock(worker_mutex_t *mutex) {
 	// so that they could compete for mutex later.
 
 	// YOUR CODE HERE
+    /*FREE the lock*/
     mutex->_lock = FREE;
     mutex->_owner = NULL;
+    /*Place all blocked threads back onto the ready queue*/
     while(!is_empty(mutex->blocked_q)){
         tcb* temp = dequeue(mutex->blocked_q);
+        temp->t_state = READY;
         if(SCHEDULER){
             enqueue(temp, sched->p_queue);
         }
@@ -320,7 +325,8 @@ int worker_mutex_unlock(worker_mutex_t *mutex) {
 /* destroy the mutex */
 int worker_mutex_destroy(worker_mutex_t *mutex) {
 	// - de-allocate dynamic memory created in worker_mutex_init
-    
+    mutex->_lock = FREE;
+    mutex->_owner = NULL;
     queue_destroy(mutex->blocked_q);
 	return 0;
 };
@@ -339,6 +345,7 @@ static void schedule() {
 	// 		sched_mlfq();
 
 	// YOUR CODE HERE
+    /*save the schedulers context*/
     if(getcontext(&sched->sched_ctx) < 0){
         perror("getcontext");
         exit(EXIT_FAILURE);
@@ -367,11 +374,13 @@ static void sched_psjf() {
     // printf("Blocked ");
     // queue_display(global_blocked);
 
+    /*No thread is currently scheduled (a thread has exited and set scheduled to NULL)*/
     if(scheduled == NULL){
         /*only one thread in queue*/
         if(length(sched->p_queue) == 1){
             scheduled = dequeue(sched->p_queue);
             scheduled->t_state = SCHEDULED;
+            /*If thread about to be scheduled has neve been scheduled yet, store start time*/
             if(scheduled->t_scheduled == 0){
                 scheduled->t_scheduled = 1;
                 clock_gettime(CLOCK_REALTIME, &scheduled->start);
@@ -381,9 +390,9 @@ static void sched_psjf() {
         }
         /*More than one thread in queue*/
         else if(length(sched->p_queue) > 1){
-            //linear search for thread with minimum elapsed time
+            /*linear search for thread with minimum elapsed time*/
             worker_t min_elapsed = get_min_elapsed(sched->p_queue);
-            //dequeue thread found in min search from queue
+            /*dequeue thread found in min search from queue*/
             scheduled = remove_at(min_elapsed, sched->p_queue);
             scheduled->t_state = SCHEDULED;
             if(scheduled->t_scheduled == 0){
@@ -394,8 +403,9 @@ static void sched_psjf() {
             setcontext(&scheduled->t_ctx);
         }
     }
-    /*One quantum has elapsed prior to the currently scheduled thread exiting*/
+    /*One quantum has elapsed prior to the currently scheduled thread exiting or a thread has been blocked*/
     else{
+        /*If main thread is the last one running disable timer interupt and set context to main thread to finish out main caller program.*/
         if(scheduled->t_id == 0 && is_empty(sched->p_queue)){
             timer.it_interval.tv_usec = 0; // 10 milliseconds
 	        timer.it_interval.tv_sec = 0; // 0 seconds
@@ -407,10 +417,17 @@ static void sched_psjf() {
             if (setitimer(ITIMER_PROF, &timer, NULL) == - 1) {
 	            perror("setitimer");
             }
+            clock_gettime(CLOCK_REALTIME, &scheduled->completion);
+            total_resp_time += (scheduled->start.tv_sec - scheduled->arrival.tv_sec) * 1000 + (scheduled->start.tv_nsec - scheduled->arrival.tv_nsec) / 1000000;
+            total_turn_time += (scheduled->completion.tv_sec - scheduled->arrival.tv_sec) * 1000 + (scheduled->completion.tv_nsec - scheduled->arrival.tv_nsec) / 1000000;
+            avg_resp_time = total_resp_time / (double)total_exited;
+            avg_turn_time = total_turn_time / (double)total_exited;
             tot_cntx_switches++;
             setcontext(&scheduled->t_ctx);
         }
+        /*If scheduled thread has been blocked swap out for another thread in ready queue*/
         if(scheduled->t_state == BLOCKED){
+            /*only one thread in queue*/
             if(length(sched->p_queue) == 1){
                 scheduled = dequeue(sched->p_queue);
                 scheduled->t_state = SCHEDULED;
@@ -421,6 +438,7 @@ static void sched_psjf() {
                 tot_cntx_switches++;
                 setcontext(&scheduled->t_ctx);
             }
+            /*More than one thread in queue*/
             else{
                 worker_t min_elapsed = get_min_elapsed(sched->p_queue);
                 scheduled = remove_at(min_elapsed, sched->p_queue);
@@ -433,6 +451,7 @@ static void sched_psjf() {
                 setcontext(&scheduled->t_ctx);
             }
         }
+        /*If scheduled thread has completed one time QUANTUM swap out for another thread in ready queue*/
         else{
             /*If queue is empty, continue to run currently scheduled thread*/
             if(is_empty(sched->p_queue)){
@@ -497,7 +516,9 @@ static void sched_mlfq() {
     // printf("Blocked ");
     // queue_display(global_blocked);
 
+    /*If scheduled has spent a full time quantum decrease priority level and place on priority queue*/
     if(scheduled != NULL && scheduled->t_state != BLOCKED){
+        /*If main thread is the last one running disable timer interupt and set context to main thread to finish out main caller program.*/
         if(scheduled->t_id == 0 && mlfq_is_empty(sched->p_queues)){
             timer.it_interval.tv_usec = 0; // 10 milliseconds
 	        timer.it_interval.tv_sec = 0; // 0 seconds
@@ -509,20 +530,28 @@ static void sched_mlfq() {
             if (setitimer(ITIMER_PROF, &timer, NULL) == - 1) {
 	            perror("setitimer");
             }
+            clock_gettime(CLOCK_REALTIME, &scheduled->completion);
+            total_resp_time += (scheduled->start.tv_sec - scheduled->arrival.tv_sec) * 1000 + (scheduled->start.tv_nsec - scheduled->arrival.tv_nsec) / 1000000;
+            total_turn_time += (scheduled->completion.tv_sec - scheduled->arrival.tv_sec) * 1000 + (scheduled->completion.tv_nsec - scheduled->arrival.tv_nsec) / 1000000;
+            avg_resp_time = total_resp_time / (double)total_exited;
+            avg_turn_time = total_turn_time / (double)total_exited;
             tot_cntx_switches++;
             setcontext(&scheduled->t_ctx);
         }
+
         if(scheduled->t_prio < (MLFQ_LEVELS - 1)){
             scheduled->t_prio++;
         }
         scheduled->t_state = READY;
         enqueue(scheduled, sched->p_queues[scheduled->t_prio]);
     }
+    /*Find next available thread at the highest level in the MLFQ, dequeue and schedule it*/
     tcb* temp = NULL;
     for(int i = 0; i < MLFQ_LEVELS; i++){
         if(!is_empty(sched->p_queues[i])){
             temp = dequeue(sched->p_queues[i]);
             curr_Q_mult = (i+1);
+            /*Set the QUANTUM to QUANTUM * (the current highest running priority thread)^2*/
             if(curr_Q_mult != prev_Q_mult){
                 prev_Q_mult = curr_Q_mult;
                 timer.it_interval.tv_sec = 0;
@@ -536,6 +565,7 @@ static void sched_mlfq() {
             break;
         }
     }
+    /*set the context to the newly scheduled thread's contextu*/
     block_signal();
     if(temp != NULL){
         scheduled = temp;
@@ -554,9 +584,9 @@ static void sched_mlfq() {
 /* Function to print global statistics. Do not modify this function.*/
 void print_app_stats(void) {
 
-       fprintf(stderr, "Total context switches %ld \n", tot_cntx_switches);
-       fprintf(stderr, "Average turnaround time %lf \n", avg_turn_time);
-       fprintf(stderr, "Average response time  %lf \n", avg_resp_time);
+       fprintf(stderr, "Total context switches %ld\n", tot_cntx_switches);
+       fprintf(stderr, "Average turnaround time %lf milliseconds\n", avg_turn_time);
+       fprintf(stderr, "Average response time  %lf milliseconds\n", avg_resp_time);
 }
 
 
@@ -582,11 +612,13 @@ static int init_main_thread()
         perror("getcontext");
         return -1;
     }
+    clock_gettime(CLOCK_REALTIME, &m_tcb->arrival);
     scheduled = m_tcb;
+    clock_gettime(CLOCK_REALTIME, &m_tcb->start);
     return 0;
 }
 
-/*queue functions*/
+/*BEGIN: Queue functions*/
 queue_t* queue_init(){
     queue_t* q = calloc(1, sizeof(queue_t));
     q->head = NULL;
@@ -594,11 +626,11 @@ queue_t* queue_init(){
     q->length = 0;
     return q;
 }
-
+/*check if a queue is empty*/
 static int is_empty(queue_t* q) {
     return q->head == NULL;
 }
-
+/*check if an mlfq is empty*/
 static int mlfq_is_empty(queue_t** mq){
     for(int i = 0; i < MLFQ_LEVELS; i++){
         if(!is_empty(mq[i])){
@@ -607,14 +639,14 @@ static int mlfq_is_empty(queue_t** mq){
     }
     return 1;
 }
-
+/*initialize a queue node with given tcb data*/
 static node_t* node_init(tcb* t){
     node_t* n = calloc(1, sizeof(node_t));
     n->data = t;
     n->next = NULL;
     return n;
 }
-
+/*enqueue a given tcb to a given queue*/
 static void enqueue(tcb* t, queue_t* q){
     node_t* n = node_init(t);
     if(is_empty(q)){
@@ -626,7 +658,7 @@ static void enqueue(tcb* t, queue_t* q){
     }
     q->length++;
 }
-
+/*dequeue a tcb from a given queue and free the expendable node*/
 static tcb* dequeue(queue_t* q){
     if(!is_empty(q)){
         node_t* temp = q->head;
@@ -643,12 +675,11 @@ static tcb* dequeue(queue_t* q){
     }
     return NULL;
 }
-
+/*remove a tcb with a given t_id value from a given queue*/
 static tcb* remove_at(worker_t id, queue_t* q){
     tcb* r = NULL;
     node_t* prev = NULL;
     node_t* curr = q->head;
-    //first node is min elapsed
     if(curr->data->t_id == id){
         r = dequeue(q);
         return r;
@@ -676,7 +707,7 @@ static tcb* remove_at(worker_t id, queue_t* q){
     }
     return r;
 }
-
+/*return a tcb given t_id exists in a given queue but do not remove the tcb from the queue*/
 static tcb *find_tcb(worker_t id, queue_t* q){
     node_t *temp = q->head;
     while (temp != NULL) {
@@ -687,7 +718,7 @@ static tcb *find_tcb(worker_t id, queue_t* q){
     }
     return NULL;
 }
-
+/*return the t_id of the thread with the minimum elapsed value fromu a given queue*/
 static worker_t get_min_elapsed(queue_t* q){
     node_t* temp = q->head;
     int min = 0;
@@ -706,12 +737,11 @@ static worker_t get_min_elapsed(queue_t* q){
     }
     return min_worker;
 }
-
-
+/*get length of a given queue*/
 static int length(queue_t* q){
     return q->length;
 }
-
+/*get total nodes in a given mlfq*/
 static int mlfq_length(queue_t** mq){
     int sum = 0;
     for(int i = 0; i < MLFQ_LEVELS; i++){
@@ -719,7 +749,7 @@ static int mlfq_length(queue_t** mq){
     }
     return sum;
 }
-
+/*free dynamic memory for a given q*/
 static void queue_destroy(queue_t* q){
     node_t* temp;
     while(!is_empty(q)){
@@ -736,6 +766,7 @@ static void queue_destroy(queue_t* q){
     }
     free(q);
 }
+/*display a given queue (for testing purposes)*/
 static void queue_display(queue_t* q){
     if(q == NULL){
         return;
@@ -748,7 +779,7 @@ static void queue_display(queue_t* q){
     }
     printf("\n");
 }
-
+/*display a given mlfq (for testing purposes)*/
 static void mlfq_display(queue_t** mq){
     for(int i = 0; i < MLFQ_LEVELS; i++){
         printf("Queue: %d |", i+1);
@@ -761,10 +792,12 @@ static void mlfq_display(queue_t** mq){
     }
     printf("-------------------------------------------\n");
 }
+/*END*/
 
-/*Scheduler functions*/
+/*BEGIN: Scheduler functions*/
+
+/*Initialize scheduler depending on preprocessor definitions (PSJF or MLFQ) */
 static sched_t* sched_init(){
-    //Initialize psjf queue
     sched_t* s = (sched_t*)calloc(1, sizeof(sched_t));
     if (s == NULL){
 		perror("Failed to allocate sched");
@@ -804,17 +837,17 @@ static sched_t* sched_init(){
 
     return s;
 }
+/*Boost all threads in mlfq to highest priority level*/
 static void boost_mlfq(queue_t** mq){
     for(int i = 1; i < MLFQ_LEVELS; i++){
         while(!is_empty(mq[i])){
             tcb* t = dequeue(mq[i]);
             t->t_prio = 0;
-            t->elapsed = 0;
             enqueue(t, mq[0]);
         }
     }
 }
-
+/*Free dynamic memory for scheduler structure*/
 static void sched_destroy(sched_t* s){
     if(SCHEDULER){
         queue_destroy(s->p_queue);
@@ -828,8 +861,10 @@ static void sched_destroy(sched_t* s){
     free(s->sched_stack);
     free(s); 
 }
+/*END*/
 
-/*Signal/Timer functions*/
+/*BEGIN: Signal/Timer functions*/
+/*block a signal*/
 static void block_signal()
 {
     sigset_t sm;
@@ -840,7 +875,7 @@ static void block_signal()
 	    abort();
     }
 }
-
+/*unblock a blocked signal*/
 static void unblock_signal()
 {
     sigset_t sm;
@@ -851,8 +886,10 @@ static void unblock_signal()
 	    abort();
     }
 }
+/*Handler function for ITIMER_PROF signal*/
 
 static void timer_handler(int signum, siginfo_t* siginfo, void* ctx) {
+    /*If MLFQ scheduler active: check if S time has elapsed, if so, boost the mlfq*/
     if(!SCHEDULER){
         getitimer(ITIMER_PROF, &timer);
         s_sum += ((timer.it_value.tv_sec * 1000) + (timer.it_value.tv_usec / 1000));
@@ -861,12 +898,14 @@ static void timer_handler(int signum, siginfo_t* siginfo, void* ctx) {
             boost_mlfq(sched->p_queues);
         }
     }
+    /*increment elapsed value for currently scheduled thread*/
     if(scheduled != NULL){
         scheduled->elapsed++;
     }
+    /*Give up CPU of scheduled thread to the scheduler*/
     worker_yield();
 }
-
+/*Initialize the sigaction handler and timer interupt and set the timer*/
 static int init_sig_timer(){
     
     struct sigaction sa; 
@@ -893,7 +932,8 @@ static int init_sig_timer(){
 
     return 0;
 }
-
+/*END*/
+/*simple power function for integer calculations*/
 static int power(int base, int exp) {
     if (exp == 0)
         return 1;
@@ -904,4 +944,3 @@ static int power(int base, int exp) {
         return temp * temp;
     }
 }
-
