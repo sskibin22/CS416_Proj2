@@ -418,6 +418,7 @@ static void sched_psjf() {
 	            perror("setitimer");
             }
             clock_gettime(CLOCK_REALTIME, &scheduled->completion);
+            total_exited++;
             total_resp_time += (scheduled->start.tv_sec - scheduled->arrival.tv_sec) * 1000 + (scheduled->start.tv_nsec - scheduled->arrival.tv_nsec) / 1000000;
             total_turn_time += (scheduled->completion.tv_sec - scheduled->arrival.tv_sec) * 1000 + (scheduled->completion.tv_nsec - scheduled->arrival.tv_nsec) / 1000000;
             avg_resp_time = total_resp_time / (double)total_exited;
@@ -531,6 +532,7 @@ static void sched_mlfq() {
 	            perror("setitimer");
             }
             clock_gettime(CLOCK_REALTIME, &scheduled->completion);
+            total_exited++;
             total_resp_time += (scheduled->start.tv_sec - scheduled->arrival.tv_sec) * 1000 + (scheduled->start.tv_nsec - scheduled->arrival.tv_nsec) / 1000000;
             total_turn_time += (scheduled->completion.tv_sec - scheduled->arrival.tv_sec) * 1000 + (scheduled->completion.tv_nsec - scheduled->arrival.tv_nsec) / 1000000;
             avg_resp_time = total_resp_time / (double)total_exited;
